@@ -28,34 +28,65 @@ func writeRow(row *[]string, priceData *Price) {
 }
 
 func main() {
-	c := colly.NewCollector()
+	c := colly.NewCollector(
+		colly.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	)
 
 	todayPrice := Price{}
 	todayPrice.Date = time.Now().Format("2006-01-02")
+
+	fmt.Println("DEBUG: Starting scraper")
+	fmt.Println("DEBUG: Server time is", time.Now().Format(time.RFC3339))
+	fmt.Println("DEBUG: Today's date used:", todayPrice.Date)
+
+	c.OnRequest(func(r *colly.Request) {
+		fmt.Println("DEBUG: Sending request to", r.URL.String())
+	})
+
+	c.OnError(func(r *colly.Response, err error) {
+		fmt.Println("ERROR: Request failed:", err)
+		if r != nil {
+			fmt.Println("ERROR: HTTP status code:", r.StatusCode)
+			fmt.Println("ERROR: Response body length:", len(r.Body), "bytes")
+		}
+	})
+
+	c.OnResponse(func(r *colly.Response) {
+		fmt.Println("DEBUG: Got response. Status:", r.StatusCode, "Body length:", len(r.Body), "bytes")
+	})
 
 	getPrice := func(e *colly.HTMLElement) int {
 		priceStr := strings.NewReplacer(",", "", " BDT/GRAM", "").Replace(e.Text)
 		price, err := strconv.Atoi(priceStr)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("DEBUG: Failed to parse price text:", e.Text, "error:", err)
 		}
 		return price
 	}
 	c.OnHTML(".gold-table tr:nth-child(1) .price", func(e *colly.HTMLElement) {
+		fmt.Println("DEBUG: Found K22 element, text:", e.Text)
 		todayPrice.K22 = getPrice(e)
 	})
 	c.OnHTML(".gold-table tr:nth-child(2) .price", func(e *colly.HTMLElement) {
+		fmt.Println("DEBUG: Found K21 element, text:", e.Text)
 		todayPrice.K21 = getPrice(e)
 	})
 	c.OnHTML(".gold-table tr:nth-child(3) .price", func(e *colly.HTMLElement) {
+		fmt.Println("DEBUG: Found K18 element, text:", e.Text)
 		todayPrice.K18 = getPrice(e)
 	})
 	c.OnHTML(".gold-table tr:nth-child(4) .price", func(e *colly.HTMLElement) {
+		fmt.Println("DEBUG: Found Traditional element, text:", e.Text)
 		todayPrice.Traditional = getPrice(e)
 	})
 
 	c.OnScraped(func(r *colly.Response) {
-		fmt.Println(todayPrice)
+		fmt.Println("DEBUG: Scraping complete. Parsed price data:", todayPrice)
+
+		if todayPrice.K22 == 0 && todayPrice.K21 == 0 && todayPrice.K18 == 0 && todayPrice.Traditional == 0 {
+			fmt.Println("WARNING: All prices are zero. Page loaded but .gold-table not found in HTML. Not writing CSV.")
+			return
+		}
 
 		f, err := os.OpenFile("./fe/src/prices.csv", os.O_RDWR, 0644)
 		if err != nil {
@@ -80,9 +111,14 @@ func main() {
 			records = append(records, make([]string, 5))
 			writeRow(&records[len(records)-1], &todayPrice)
 		}
-		f.Seek(0, 0);
+		f.Seek(0, 0)
 		csv.NewWriter(f).WriteAll(records)
+		fmt.Println("DEBUG: CSV updated successfully")
 	})
 
-	c.Visit("https://www.bajus.org/gold-price")
+	err := c.Visit("https://www.bajus.org/gold-price")
+	if err != nil {
+		fmt.Println("ERROR: Visit returned error:", err)
+	}
+	fmt.Println("DEBUG: Scraper finished.")
 }
